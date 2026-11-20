@@ -23,31 +23,36 @@ Every topic follows the same pattern: **what it is**, **why DevOps people care**
 9. [Public vs Private IP](#9-public-vs-private-ip)
 10. [NAT: Network Address Translation](#10-nat-network-address-translation)
 11. [DHCP: Getting an IP Automatically](#11-dhcp-getting-an-ip-automatically)
+12. [Routing and Gateways](#12-routing-and-gateways) 🆕
 
 **PART 2: Protocols (The Languages)**
 
-12. [TCP vs UDP](#12-tcp-vs-udp)
-13. [Ports and Sockets](#13-ports-and-sockets)
-14. [DNS](#14-dns)
-15. [HTTP and HTTPS](#15-http-and-https)
-16. [SSH](#16-ssh)
-17. [FTP, SFTP and File Transfer](#17-ftp-sftp-and-file-transfer)
-18. [SMTP and Email](#18-smtp-and-email)
+13. [TCP vs UDP](#13-tcp-vs-udp)
+14. [Ports and Sockets](#14-ports-and-sockets)
+15. [DNS](#15-dns)
+16. [HTTP and HTTPS](#16-http-and-https)
+17. [SSL/TLS Certificates and the HTTPS Handshake](#17-ssltls-certificates-and-the-https-handshake) 🆕
+18. [SSH](#18-ssh)
+19. [FTP, SFTP and File Transfer](#19-ftp-sftp-and-file-transfer)
+20. [SMTP and Email](#20-smtp-and-email)
 
 **PART 3: Network Infrastructure**
 
-19. [Load Balancers](#19-load-balancers)
-20. [Proxy and Reverse Proxy](#20-proxy-and-reverse-proxy)
-21. [Firewalls and Security Groups](#21-firewalls-and-security-groups)
-22. [VPN](#22-vpn)
+21. [Load Balancers (L4 vs L7)](#21-load-balancers)
+22. [Proxy and Reverse Proxy](#22-proxy-and-reverse-proxy)
+23. [Firewalls and Security Groups](#23-firewalls-and-security-groups)
+24. [Linux Firewalls: iptables, ufw, firewalld](#24-linux-firewalls-iptables-ufw-firewalld) 🆕
+25. [VPN](#25-vpn)
+26. [VPC: Your Private Network in the Cloud](#26-vpc-your-private-network-in-the-cloud) 🆕
 
 **PART 4: Tools and Practice**
 
-23. [The Networking Toolbox](#23-the-networking-toolbox)
-24. [Troubleshooting Playbook](#24-troubleshooting-playbook)
-25. [Practice Labs](#25-practice-labs)
-26. [Cheat Sheet](#26-cheat-sheet)
-27. [Reference](#27-reference)
+27. [The Networking Toolbox](#27-the-networking-toolbox)
+28. [Troubleshooting Playbook](#28-troubleshooting-playbook)
+29. [Practice Labs](#29-practice-labs)
+30. [Cheat Sheet](#30-cheat-sheet)
+31. [Interview Questions](#31-interview-questions) 🆕
+32. [Reference](#32-reference)
 
 ---
 
@@ -200,10 +205,10 @@ This single picture ties the whole guide together. Everything you will read late
 
 ### 5.1 The six steps
 
-1. **DNS** - your computer asks "what is the IP of `example.com`?" and gets `93.184.216.34`. (Section 14)
-2. **TCP handshake** - your computer and the server agree to talk, on port 443. (Section 12)
-3. **TLS handshake** - they swap a certificate and keys, so everything after this is encrypted. (Section 15)
-4. **HTTP request** - `GET / HTTP/1.1` plus headers goes up the tunnel. (Section 15)
+1. **DNS** - your computer asks "what is the IP of `example.com`?" and gets `93.184.216.34`. (Section 15)
+2. **TCP handshake** - your computer and the server agree to talk, on port 443. (Section 13)
+3. **TLS handshake** - they swap a certificate and keys, so everything after this is encrypted. (Section 17)
+4. **HTTP request** - `GET / HTTP/1.1` plus headers goes up the tunnel. (Section 16)
 5. **HTTP response** - `200 OK` comes back with HTML, then CSS, JS and images.
 6. **Render** - the browser draws the page.
 
@@ -470,7 +475,7 @@ curl ifconfig.me          # 203.0.113.7   → public, what the world sees
 
 If both commands show the **same** address, your machine has a real public IP (common on cloud servers). If they differ, you are behind **NAT** (next section).
 
-> ⚠️ **Warning:** A private IP is not security. Anything inside the same network can still reach it. Firewalls and security groups are what protect you (Section 21).
+> ⚠️ **Warning:** A private IP is not security. Anything inside the same network can still reach it. Firewalls and security groups are what protect you (Section 23).
 
 > 💡 **Tip:** Interview question: *"Can two companies both use 192.168.1.10?"* Yes - private addresses are never routed on the internet, so they can be reused everywhere. The only problem is when you connect two such networks together (VPN) and the ranges overlap.
 
@@ -565,19 +570,143 @@ ipconfig /renew
 In the cloud you get the best of both: the instance uses DHCP, but the subnet always gives it the **same** private IP for its lifetime.
 
 > ⚠️ **Warning:** An address starting `169.254.` means DHCP got **no answer**. Check that the DHCP server is up, the interface is really connected, and that nothing is blocking UDP 67/68.
+
+---
+
+## 12. Routing and Gateways
+
+**What it is:** Routing is how a packet finds its way from one network to another. A **router** is a machine that connects networks and forwards packets between them. The **gateway** (default gateway) is the router your machine sends everything to when the destination is *not* on its own network.
+
+**Why DevOps people care:** "Can't reach it" is very often "no route to it". Every cloud subnet has a route table, every Docker host is a router, and every Kubernetes node forwards pod traffic. If you can read a route table, you can explain most connectivity problems.
+
+```mermaid
+flowchart LR
+    A["Laptop<br/>192.168.1.25/24"] -->|"destination not in 192.168.1.0/24<br/>→ send to gateway"| R["Home router / gateway<br/>192.168.1.1"]
+    A -.->|"same subnet<br/>→ deliver directly (ARP)"| P["Printer<br/>192.168.1.40"]
+    R -->|"NAT + forward"| ISP["ISP router"]
+    ISP --> NET(("Internet"))
+    NET --> S["Server<br/>93.184.216.34"]
+```
+
+### 12.1 The one decision every host makes
+
+For every packet it sends, a machine asks one question:
+
+```
+Is the destination IP inside my own subnet?
+ ├── YES → deliver it directly. Use ARP to find the destination's MAC address.
+ └── NO  → send it to the gateway. Use ARP to find the GATEWAY's MAC address.
+```
+
+That is the whole idea. The gateway then makes the same kind of decision using its own route table, and so on, hop by hop, until the packet arrives. Each hop decrements the **TTL** by one; at 0 the packet is dropped (this is exactly how `traceroute` works).
+
+### 12.2 Reading a route table
+
+```bash
+ip route                 # Linux
+route print              # Windows
+netstat -rn              # Mac / older Linux
+```
+
+```
+default via 192.168.1.1 dev eth0 proto dhcp metric 100
+10.8.0.0/24 dev wg0 proto kernel scope link src 10.8.0.6
+172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1
+192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.25
+```
+
+| Line | Meaning |
+|------|---------|
+| `default via 192.168.1.1` | Anything I don't have a better route for → send to the router. `default` = `0.0.0.0/0` |
+| `10.8.0.0/24 dev wg0` | The VPN network is reachable through the WireGuard interface |
+| `172.17.0.0/16 dev docker0` | Docker containers live behind the `docker0` bridge |
+| `192.168.1.0/24 dev eth0 scope link` | My own LAN - deliver directly, no gateway needed |
+
+### 12.3 Longest prefix match - how the route is chosen
+
+When several routes match, the **most specific one wins** (the biggest prefix number).
+
+| Destination | Matching routes | Winner |
+|-------------|-----------------|--------|
+| `10.8.0.20` | `10.8.0.0/24`, `0.0.0.0/0` | `/24` → via `wg0` (VPN) |
+| `8.8.8.8` | `0.0.0.0/0` only | default → via the router |
+| `192.168.1.40` | `192.168.1.0/24`, `0.0.0.0/0` | `/24` → direct on `eth0` |
+
+If two routes have the same prefix, the lower **metric** wins. This is why a VPN can take over "all traffic": it simply installs a more specific route (or two `/1` routes that beat `/0`).
+
+```bash
+# Ask the kernel which route it would use - the most useful routing command
+ip route get 8.8.8.8
+# 8.8.8.8 via 192.168.1.1 dev eth0 src 192.168.1.25
+```
+
+### 12.4 Static routes
+
+```bash
+# Reach the 10.20.0.0/16 network through a router at 192.168.1.254
+sudo ip route add 10.20.0.0/16 via 192.168.1.254
+sudo ip route del 10.20.0.0/16
+
+# Change the default gateway
+sudo ip route replace default via 192.168.1.1
+
+# Windows
+route add 10.20.0.0 mask 255.255.0.0 192.168.1.254
+```
+
+> ⚠️ **Warning:** `ip route add` is lost on reboot. Make it permanent in netplan (`/etc/netplan/*.yaml` → `routes:`), NetworkManager (`nmcli`), or `/etc/sysconfig/network-scripts/route-eth0` on RHEL.
+
+### 12.5 Turning a Linux box into a router
+
+A Linux machine only forwards packets between interfaces if you allow it. Docker, Kubernetes and VPN servers all switch this on:
+
+```bash
+cat /proc/sys/net/ipv4/ip_forward               # 0 = off, 1 = on
+sudo sysctl -w net.ipv4.ip_forward=1            # on until reboot
+echo "net.ipv4.ip_forward=1" | sudo tee /etc/sysctl.d/99-forward.conf   # permanent
+```
+
+Add a NAT rule (Section 24) and you have built a home router / NAT gateway.
+
+### 12.6 Routing in the cloud
+
+A cloud **route table** is the same idea, attached to a subnet:
+
+| Destination | Target | Meaning |
+|-------------|--------|---------|
+| `10.0.0.0/16` | `local` | Anything inside the VPC is delivered directly |
+| `0.0.0.0/0` | `igw-xxxx` (internet gateway) | This makes it a **public** subnet |
+| `0.0.0.0/0` | `nat-xxxx` (NAT gateway) | Private subnet with outbound internet |
+| `172.16.0.0/16` | `pcx-xxxx` / `tgw-xxxx` | Another VPC via peering / transit gateway |
+| `192.168.0.0/16` | `vgw-xxxx` | The office, via a site-to-site VPN |
+
+More in Section 26 (VPC).
+
+### 12.7 Static vs dynamic routing
+
+| | Static | Dynamic |
+|---|---|---|
+| Who writes routes | You, by hand | Routers tell each other (protocols) |
+| Protocols | - | **BGP** (between companies / the internet, cloud VPN, Kubernetes Calico), **OSPF** (inside a company) |
+| Good for | Small networks, servers, cloud route tables | Large or changing networks |
+
+> 💡 **Tip:** You will rarely configure BGP yourself, but you will hear it: "a BGP leak took down half the internet", "Calico peers with the top-of-rack switch over BGP", "the Direct Connect announces our prefixes over BGP". It is the protocol that tells the internet *where* each IP range lives.
+
+> ⚠️ **Warning:** **Asymmetric routing** - the request goes out one path and the reply comes back another - makes stateful firewalls drop the reply. If traffic works one way but "hangs" the other, check the route back, not just the route there.
+
 ---
 
 # PART 2: Protocols (The Languages)
 
 ---
 
-## 12. TCP vs UDP
+## 13. TCP vs UDP
 
 **What it is:** Two ways to deliver data. TCP checks everything arrived; UDP just fires it off.
 
 ![TCP vs UDP](images/11-tcp-vs-udp.png)
 
-### 12.1 Side by side
+### 13.1 Side by side
 
 | | TCP | UDP |
 |---|-----|-----|
@@ -589,7 +718,7 @@ In the cloud you get the best of both: the instance uses DHCP, but the subnet al
 | Analogy | A phone call | Shouting across a room |
 | Used by | HTTP(S), SSH, SMTP, FTP, MySQL | DNS, DHCP, NTP, video calls, games, syslog |
 
-### 12.2 The TCP 3-way handshake
+### 13.2 The TCP 3-way handshake
 
 ```
 Client ──────── SYN ────────▶ Server     "can we talk?"
@@ -606,7 +735,7 @@ sudo tcpdump -i any -n "tcp port 443 and host example.com"
 curl -s https://example.com > /dev/null     # in another terminal
 ```
 
-### 12.3 Why this explains your error messages
+### 13.3 Why this explains your error messages
 
 | What you see | What it means at TCP level |
 |--------------|---------------------------|
@@ -616,7 +745,7 @@ curl -s https://example.com > /dev/null     # in another terminal
 
 That difference between *refused* and *timed out* saves hours. Refused = service problem. Timeout = firewall/routing problem.
 
-### 12.4 When to pick UDP
+### 13.4 When to pick UDP
 
 Pick UDP when a late packet is worthless anyway: live video, voice, metrics, logs, game state. Pick TCP whenever losing a byte would corrupt the result: web pages, files, databases.
 
@@ -624,13 +753,13 @@ Pick UDP when a late packet is worthless anyway: live video, voice, metrics, log
 
 ---
 
-## 13. Ports and Sockets
+## 14. Ports and Sockets
 
 **What it is:** The IP finds the **machine**; the port finds the **program** on that machine.
 
 ![Ports](images/12-ports.png)
 
-### 13.1 The three ranges
+### 14.1 The three ranges
 
 | Range | Name | Notes |
 |-------|------|-------|
@@ -640,7 +769,7 @@ Pick UDP when a late packet is worthless anyway: live video, voice, metrics, log
 
 A **socket** is the pair `IP:port`. A connection is really four things: `source IP:port → destination IP:port`.
 
-### 13.2 The ports every DevOps engineer should know by heart
+### 14.2 The ports every DevOps engineer should know by heart
 
 | Port | Protocol | Use |
 |------|----------|-----|
@@ -663,7 +792,7 @@ A **socket** is the pair `IP:port`. A connection is really four things: `source 
 | 9090 / 9100 | Prometheus / node exporter | Metrics |
 | 27017 | MongoDB | Database |
 
-### 13.3 Seeing what is listening
+### 14.3 Seeing what is listening
 
 ```bash
 ss -tulpn                 # modern Linux: TCP, UDP, listening, process, numeric
@@ -682,7 +811,7 @@ Read it carefully:
 - `0.0.0.0:443` = listening on **all** interfaces → reachable from outside ✅
 - `127.0.0.1:3306` = listening on **localhost only** → nothing outside this machine can connect ❌
 
-### 13.4 Testing a port from another machine
+### 14.4 Testing a port from another machine
 
 ```bash
 nc -zv example.com 443           # best: tells you open / refused / timeout
@@ -696,7 +825,7 @@ curl -v telnet://example.com:443 # when nc and telnet are missing
 
 ---
 
-## 14. DNS
+## 15. DNS
 
 **What it is:** The system that turns names into IP addresses.
 
@@ -704,7 +833,7 @@ curl -v telnet://example.com:443 # when nc and telnet are missing
 
 ![DNS](images/13-dns.png)
 
-### 14.1 How a lookup works
+### 15.1 How a lookup works
 
 1. Browser cache → 2. OS cache → 3. `/etc/hosts` → 4. **Resolver** (your ISP, `8.8.8.8`, `1.1.1.1`)
 5. Resolver asks a **root** server → "ask `.com`"
@@ -712,7 +841,7 @@ curl -v telnet://example.com:443 # when nc and telnet are missing
 7. Asks the **authoritative** server → "`93.184.216.34`"
 8. Answer is cached at every step for **TTL** seconds.
 
-### 14.2 Record types
+### 15.2 Record types
 
 | Record | Does what | Example |
 |--------|-----------|---------|
@@ -725,7 +854,7 @@ curl -v telnet://example.com:443 # when nc and telnet are missing
 | `PTR` | IP → name (reverse) | `34.216.184.93.in-addr.arpa` |
 | `SRV` | Service location (port + host) | Used by Kubernetes, SIP, AD |
 
-### 14.3 The commands
+### 15.3 The commands
 
 ```bash
 dig example.com                    # full answer with TTL and sections
@@ -744,7 +873,7 @@ ipconfig /displaydns               # Windows: see the cache
 ipconfig /flushdns                 # Windows: clear it
 ```
 
-### 14.4 Reading `dig` output
+### 15.4 Reading `dig` output
 
 ```
 ;; ANSWER SECTION:
@@ -754,7 +883,7 @@ example.com.        3600    IN    A     93.184.216.34
                      └── TTL: cached for 3600 seconds (1 hour)
 ```
 
-### 14.5 The classic DNS traps
+### 15.5 The classic DNS traps
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
@@ -772,13 +901,13 @@ example.com.        3600    IN    A     93.184.216.34
 
 ---
 
-## 15. HTTP and HTTPS
+## 16. HTTP and HTTPS
 
 **What it is:** HTTP is the request/response language of the web. HTTPS is exactly the same language inside a TLS-encrypted tunnel on port 443.
 
 ![HTTP and HTTPS](images/14-http-https.png)
 
-### 15.1 A request and a response
+### 16.1 A request and a response
 
 ```http
 GET /api/users HTTP/1.1
@@ -797,7 +926,7 @@ Cache-Control: max-age=60
 {"users": [...]}
 ```
 
-### 15.2 Methods
+### 16.2 Methods
 
 | Method | Means | Changes data? |
 |--------|-------|---------------|
@@ -808,7 +937,7 @@ Cache-Control: max-age=60
 | `DELETE` | Remove something | Yes |
 | `HEAD` | Like GET but headers only | No |
 
-### 15.3 Status codes - what to check first
+### 16.3 Status codes - what to check first
 
 | Code | Meaning | Where to look |
 |------|---------|---------------|
@@ -827,12 +956,14 @@ Cache-Control: max-age=60
 
 > 💡 **Tip:** `4xx` = the client's fault. `5xx` = the server's fault. `502/503/504` always point at the **gap between the proxy and the backend** - start there, not in the browser.
 
-### 15.4 HTTPS and TLS in one minute
+### 16.4 HTTPS and TLS in one minute
 
 1. Client says hello and lists the ciphers it supports.
 2. Server sends its **certificate** (proving it owns the domain).
 3. They agree on a session key.
 4. Everything after that is encrypted. 🔒
+
+The full step-by-step handshake, certificates and chains are in **Section 17**.
 
 ```bash
 # Look at a certificate: who issued it, when it expires
@@ -853,7 +984,7 @@ curl -v https://example.com
 | `hostname mismatch` | Certificate is for `www.example.com`, you asked for `example.com` |
 | `unable to get local issuer certificate` | Missing intermediate certificate in the chain |
 
-### 15.5 Useful curl flags
+### 16.5 Useful curl flags
 
 ```bash
 curl -I URL                       # headers only
@@ -869,13 +1000,230 @@ That last one is gold: it tests a **new server** using the real hostname and cer
 
 ---
 
-## 16. SSH
+## 17. SSL/TLS Certificates and the HTTPS Handshake
+
+**What it is:** **TLS** (Transport Layer Security) is the encryption layer under HTTPS, SMTPS, IMAPS, LDAPS, database connections and more. **SSL** is its old, broken predecessor - people still say "SSL certificate", but everything today is TLS 1.2 or TLS 1.3. A **certificate** is a signed file that proves "this public key really belongs to `example.com`".
+
+**Why DevOps people care:** Expired certificates are one of the most common *self-inflicted* outages. You will issue certificates, renew them automatically, install them on nginx/load balancers/Kubernetes ingress, and debug handshake errors.
+
+### 17.1 TLS gives you three things
+
+| Guarantee | Meaning | Without it |
+|-----------|---------|-----------|
+| **Encryption** | Nobody in the middle can read the traffic | Passwords readable on café Wi-Fi |
+| **Authentication** | You are really talking to `example.com` | A fake server can impersonate the site |
+| **Integrity** | Nobody changed the data in transit | Ads or malware injected into pages |
+
+### 17.2 What is inside a certificate
+
+```bash
+echo | openssl s_client -connect github.com:443 -servername github.com 2>/dev/null \
+  | openssl x509 -noout -text | less
+```
+
+| Field | Example | Why it matters |
+|-------|---------|----------------|
+| **Subject (CN)** | `CN=github.com` | Who the certificate is for (legacy field) |
+| **Subject Alternative Names (SAN)** | `DNS:github.com, DNS:www.github.com` | **The names browsers actually check** |
+| **Issuer** | `Sectigo ECC Domain Validation Secure Server CA` | Which CA signed it |
+| **Validity** | `notBefore` / `notAfter` | The expiry date that wakes you up at 3am |
+| **Public key** | EC 256-bit / RSA 2048-bit | Used in the handshake |
+| **Signature** | Signed by the issuer's private key | Proves the CA vouches for it |
+
+### 17.3 The chain of trust
+
+```mermaid
+flowchart TD
+    R["🏛️ Root CA<br/>(pre-installed in your OS / browser trust store)"] -->|signs| I["Intermediate CA<br/>(sent by the server)"]
+    I -->|signs| L["Leaf / server certificate<br/>CN=example.com<br/>(sent by the server)"]
+```
+
+1. The server sends its **leaf** certificate **plus the intermediate(s)** - this bundle is `fullchain.pem`.
+2. The client checks each signature up the chain until it reaches a **root** it already trusts.
+3. The client checks the name matches, the dates are valid, and it is not revoked.
+
+> ⚠️ **Warning:** "Works in Chrome, fails in `curl` / Java / Python" is almost always a **missing intermediate**. Browsers sometimes fetch it themselves; other clients don't. Always configure `fullchain.pem`, not `cert.pem`.
+
+### 17.4 Certificate types
+
+| Type | Covers | Note |
+|------|--------|------|
+| **Single domain** | `app.example.com` | |
+| **Wildcard** | `*.example.com` | One level only: covers `api.example.com`, **not** `v1.api.example.com` and not `example.com` itself |
+| **SAN / multi-domain** | Several names in one cert | What Let's Encrypt gives you with multiple `-d` flags |
+| **DV** (domain validated) | Proves you control the domain | Free and automatic (Let's Encrypt, AWS ACM). This is what 99% of sites use |
+| **OV / EV** | Also checks the organisation | Costs money, browsers no longer show a visible difference |
+| **Self-signed** | Signed by itself | Fine for labs and internal testing, untrusted everywhere else |
+| **Private CA** | Your company's own root | Internal services, service mesh, mTLS |
+
+### 17.5 File formats you will be handed
+
+| Extension | What it is |
+|-----------|-----------|
+| `.pem` / `.crt` / `.cer` | Base64 text starting with `-----BEGIN CERTIFICATE-----` (most common on Linux) |
+| `.key` | The **private key** (`-----BEGIN PRIVATE KEY-----`) - never share, never commit |
+| `.csr` | Certificate Signing Request - what you send to a CA |
+| `.der` | Binary version of a certificate (Java, Windows) |
+| `.pfx` / `.p12` | Certificate + chain + private key in one password-protected file (Windows / IIS / Azure) |
+
+```bash
+# Convert PFX → PEM (cert + key)
+openssl pkcs12 -in site.pfx -out site.pem -nodes
+
+# Does this key belong to this certificate? (the two hashes must match)
+openssl x509 -noout -pubkey -in cert.pem | openssl sha256
+openssl pkey -pubout -in private.key   | openssl sha256
+```
+
+### 17.6 The TLS 1.3 handshake, step by step
+
+TLS 1.3 needs **one round trip** (1-RTT) after the TCP handshake:
+
+```mermaid
+sequenceDiagram
+    participant C as Client (browser)
+    participant S as Server (example.com)
+    Note over C,S: TCP 3-way handshake first (SYN, SYN-ACK, ACK)
+    C->>S: ClientHello: TLS versions, cipher suites, key_share, SNI = example.com
+    S->>C: ServerHello: chosen cipher + server key_share
+    Note over C,S: Both sides now compute the same session keys (ECDHE)
+    S->>C: 🔒 Certificate + CertificateVerify + Finished
+    Note over C: Verify chain, name, dates
+    C->>S: 🔒 Finished
+    C->>S: 🔒 GET / HTTP/1.1 (application data)
+    S->>C: 🔒 HTTP/1.1 200 OK
+```
+
+In plain words:
+
+1. **ClientHello** - "I speak TLS 1.3 and 1.2, here are the ciphers I know, here is my half of a key exchange, and I want **`example.com`**" (that last bit is **SNI**).
+2. **ServerHello** - "Let's use TLS 1.3 with `TLS_AES_128_GCM_SHA256`, here is my half of the key exchange."
+3. Both sides combine the halves (**ECDHE** - Diffie-Hellman) into the same secret **without ever sending it**. From here on, everything is encrypted.
+4. The server sends its **certificate**, and **signs** the handshake with its private key to prove it owns the certificate.
+5. The client validates the certificate. Both send **Finished**. Application data flows.
+
+**TLS 1.2 vs 1.3:**
+
+| | TLS 1.2 | TLS 1.3 |
+|---|---|---|
+| Round trips | 2 | **1** (0-RTT possible for repeat visits) |
+| Certificate sent | In plain text | **Encrypted** |
+| Old weak ciphers (RSA key exchange, CBC, SHA-1) | Allowed | **Removed** |
+| Forward secrecy | Optional | **Always** |
+| Status | Still acceptable | Preferred |
+| SSL 3.0, TLS 1.0, TLS 1.1 | ❌ Disable everywhere | |
+
+> 💡 **Tip:** **Forward secrecy** means that even if someone steals the server's private key next year, they cannot decrypt traffic they recorded today - because the session keys came from a temporary Diffie-Hellman exchange, not from the certificate key.
+
+### 17.7 SNI - many HTTPS sites on one IP
+
+The client sends the hostname in the ClientHello **before** encryption starts, so one nginx or load balancer on one IP can pick the right certificate for hundreds of domains. This is why `openssl s_client` needs `-servername`, and why a missing SNI gives you the *default* (wrong) certificate.
+
+```bash
+# With SNI - correct certificate
+openssl s_client -connect 203.0.113.50:443 -servername app.example.com
+# Without SNI - you may see the default certificate instead
+openssl s_client -connect 203.0.113.50:443
+```
+
+### 17.8 Get a free certificate with Let's Encrypt
+
+```bash
+sudo apt install certbot python3-certbot-nginx
+sudo certbot --nginx -d example.com -d www.example.com   # issues AND edits nginx for you
+sudo certbot certificates                                # what you have, and expiry dates
+sudo certbot renew --dry-run                             # test auto-renewal
+systemctl list-timers | grep certbot                     # the renewal timer
+```
+
+Let's Encrypt certificates last **90 days**; certbot renews them automatically around day 60. Other ways to get them: **AWS ACM** (free, auto-renewing, for ALB/CloudFront), **cert-manager** in Kubernetes, Caddy/Traefik (built-in ACME).
+
+How Let's Encrypt checks you own the domain:
+
+| Challenge | How | Use when |
+|-----------|-----|----------|
+| **HTTP-01** | Serves a file at `http://domain/.well-known/acme-challenge/` | Normal public web server (port 80 must be open) |
+| **DNS-01** | Creates a `TXT` record `_acme-challenge.domain` | **Wildcard** certificates, servers not reachable from the internet |
+
+### 17.9 Make your own (labs and internal use)
+
+```bash
+# Self-signed certificate + key in one command (valid 365 days, with a SAN)
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout server.key -out server.crt \
+  -subj "/CN=myapp.local" -addext "subjectAltName=DNS:myapp.local,IP:127.0.0.1"
+
+# A CSR to send to a real CA
+openssl req -new -newkey rsa:2048 -nodes \
+  -keyout example.com.key -out example.com.csr -subj "/CN=example.com"
+```
+
+### 17.10 nginx TLS config that is actually good
+
+```nginx
+server {
+    listen 443 ssl;
+    http2 on;                  # nginx 1.25.1+; older versions: "listen 443 ssl http2;"
+    server_name example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;   # leaf + intermediates
+    ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;   # HSTS
+}
+
+server {                       # redirect all plain HTTP to HTTPS
+    listen 80;
+    server_name example.com;
+    return 301 https://$host$request_uri;
+}
+```
+
+**HSTS** tells the browser "never talk plain HTTP to this site again", which blocks downgrade attacks. Grade the result with the [SSL Labs test](https://www.ssllabs.com/ssltest/).
+
+### 17.11 mTLS - when the client needs a certificate too
+
+Normal TLS: only the **server** proves who it is. **Mutual TLS**: the **client** also presents a certificate. Used for service-to-service traffic (Istio/Linkerd service mesh), APIs between companies, and zero-trust networks.
+
+```bash
+curl --cert client.crt --key client.key --cacert ca.crt https://api.internal
+```
+
+### 17.12 Where TLS terminates
+
+| Pattern | Traffic is encrypted | Note |
+|---------|---------------------|------|
+| **Termination at the LB** | Client → LB only | Simplest; backends speak plain HTTP inside the VPC |
+| **Re-encryption** | Client → LB, and LB → backend | Required by many compliance rules (PCI, HIPAA) |
+| **Passthrough** (L4) | Client → backend directly | LB cannot read HTTP, so no path routing; backend holds the cert |
+
+### 17.13 Monitoring expiry
+
+```bash
+# Days left on a certificate - put this in a cron job or monitoring check
+echo | openssl s_client -connect example.com:443 -servername example.com 2>/dev/null \
+  | openssl x509 -noout -enddate
+
+# Fail if it expires in the next 14 days (exit code 1)
+echo | openssl s_client -connect example.com:443 -servername example.com 2>/dev/null \
+  | openssl x509 -noout -checkend $((14*24*3600))
+```
+
+The common TLS error messages and their real causes are in the table in **16.4**.
+
+> ⚠️ **Warning:** `curl -k` / `verify=False` / `InsecureSkipVerify: true` turns off authentication completely - you are encrypted, but possibly to an attacker. Use it to debug for one minute, never in code or pipelines. Fix the trust store (`--cacert`) instead.
+
+---
+
+## 18. SSH
 
 **What it is:** Encrypted remote login and file copy, on **port 22**.
 
 ![SSH](images/15-ssh.png)
 
-### 16.1 Keys, not passwords
+### 18.1 Keys, not passwords
 
 ```bash
 ssh-keygen -t ed25519 -C "you@example.com"     # creates ~/.ssh/id_ed25519(.pub)
@@ -886,7 +1234,7 @@ ssh user@10.0.1.5                              # log in, no password
 - `id_ed25519` = **private** key. Never leaves your laptop, never goes in Git.
 - `id_ed25519.pub` = **public** key. Goes into the server's `~/.ssh/authorized_keys`.
 
-### 16.2 Everyday commands
+### 18.2 Everyday commands
 
 ```bash
 ssh -i ~/.ssh/aws.pem ec2-user@203.0.113.9     # specific key file
@@ -898,7 +1246,7 @@ rsync -avz ./site/ user@host:/var/www/site/    # copy only what changed
 sftp user@host                                 # interactive file session
 ```
 
-### 16.3 SSH tunnels (how you reach a locked-down service)
+### 18.3 SSH tunnels (how you reach a locked-down service)
 
 ```bash
 # Local forward: my localhost:8080 → the server's localhost:80
@@ -911,7 +1259,7 @@ ssh -L 5432:db.internal:5432 user@bastion
 
 This is how you open a private admin panel or database that has no public IP at all.
 
-### 16.4 `~/.ssh/config` - stop typing long commands
+### 18.4 `~/.ssh/config` - stop typing long commands
 
 ```
 Host prod
@@ -928,7 +1276,7 @@ Host db
 
 Now `ssh prod` and `ssh db` just work.
 
-### 16.5 Hardening (`/etc/ssh/sshd_config`)
+### 18.5 Hardening (`/etc/ssh/sshd_config`)
 
 ```
 PermitRootLogin no
@@ -948,7 +1296,7 @@ Plus: allow port 22 **only** from your office or VPN range in the firewall.
 
 ---
 
-## 17. FTP, SFTP and File Transfer
+## 19. FTP, SFTP and File Transfer
 
 ![File transfer and email protocols](images/16-ftp-smtp.png)
 
@@ -972,7 +1320,7 @@ rsync -avz --delete ./dist/ user@host:/var/www/dist/   # mirror a folder
 
 ---
 
-## 18. SMTP and Email
+## 20. SMTP and Email
 
 | Protocol | Port | Job |
 |----------|------|-----|
@@ -981,7 +1329,7 @@ rsync -avz --delete ./dist/ user@host:/var/www/dist/   # mirror a folder
 | **IMAP** | 143 / 993 | Read mail, stays on the server, syncs across devices |
 | **POP3** | 110 / 995 | Download mail, usually deletes the server copy |
 
-### 18.1 Why DevOps engineers care
+### 20.1 Why DevOps engineers care
 
 Alerting, password resets and CI notifications all go through SMTP. When mail stops arriving, check in this order:
 
@@ -1005,7 +1353,7 @@ echo "test body" | mail -s "test subject" you@example.com
 
 ---
 
-## 19. Load Balancers
+## 21. Load Balancers
 
 **What it is:** One public entry point that spreads traffic across many servers and skips the unhealthy ones.
 
@@ -1013,7 +1361,7 @@ echo "test body" | mail -s "test subject" you@example.com
 
 ![Load balancer](images/17-load-balancer.png)
 
-### 19.1 What it actually gives you
+### 21.1 What it actually gives you
 
 | Benefit | How |
 |---------|-----|
@@ -1023,7 +1371,7 @@ echo "test body" | mail -s "test subject" you@example.com
 | TLS termination | Certificates live on the LB, backends speak plain HTTP |
 | One DNS name | `app.example.com` never changes, servers come and go |
 
-### 19.2 Layer 4 vs Layer 7
+### 21.2 Layer 4 vs Layer 7
 
 | | Layer 4 (transport) | Layer 7 (application) |
 |---|---|---|
@@ -1032,7 +1380,7 @@ echo "test body" | mail -s "test subject" you@example.com
 | Speed | Very fast | Slightly slower |
 | Examples | AWS NLB, HAProxy TCP mode | AWS ALB, nginx, Traefik, Envoy |
 
-### 19.3 Algorithms
+### 21.3 Algorithms
 
 | Algorithm | How it picks |
 |-----------|--------------|
@@ -1041,7 +1389,7 @@ echo "test body" | mail -s "test subject" you@example.com
 | **IP hash / sticky** | The same client always lands on the same server (for in-memory sessions) |
 | **Weighted** | Bigger servers get more traffic |
 
-### 19.4 Health checks - the part people get wrong
+### 21.4 Health checks - the part people get wrong
 
 ```
 GET /health  every 10s
@@ -1061,9 +1409,90 @@ curl -s -o /dev/null -w "%{http_code}\n" http://10.0.1.11:8080/health
 
 > 💡 **Tip:** Sticky sessions are a crutch. Store sessions in Redis or a database and any server can serve any user - that is what makes autoscaling painless.
 
+### 21.5 L4 vs L7 in real config
+
+The same nginx can do both. The difference is *what it can see*.
+
+**Layer 4** - nginx only sees IP + port, so it just forwards TCP bytes (works for anything: databases, MQTT, TLS passthrough):
+
+```nginx
+# /etc/nginx/nginx.conf  (top level, NOT inside http {})
+stream {
+    upstream postgres_pool {
+        least_conn;
+        server 10.0.21.10:5432;
+        server 10.0.22.10:5432 backup;
+    }
+    server {
+        listen 5432;
+        proxy_pass postgres_pool;
+    }
+}
+```
+
+**Layer 7** - nginx reads the HTTP request, so it can route by host, path, header or cookie:
+
+```nginx
+http {
+    upstream web_pool {
+        server 10.0.11.10:8080 weight=3;
+        server 10.0.12.10:8080;
+        server 10.0.13.10:8080 max_fails=3 fail_timeout=30s;
+    }
+    upstream api_pool {
+        server 10.0.11.20:5000;
+        server 10.0.12.20:5000;
+    }
+    server {
+        listen 80;
+        location /api/ { proxy_pass http://api_pool; }   # path-based routing
+        location /     { proxy_pass http://web_pool; }
+    }
+}
+```
+
+The same idea in **HAProxy** (very common as a dedicated LB):
+
+```
+frontend http_in
+    bind *:80
+    mode http                                  # L7 ("mode tcp" = L4)
+    acl is_api path_beg /api
+    use_backend api_servers if is_api
+    default_backend web_servers
+
+backend web_servers
+    mode http
+    balance roundrobin
+    option httpchk GET /health
+    server web1 10.0.11.10:8080 check
+    server web2 10.0.12.10:8080 check
+
+backend api_servers
+    mode http
+    balance leastconn
+    server api1 10.0.11.20:5000 check
+```
+
+**Which to choose:**
+
+| Pick **L4** when | Pick **L7** when |
+|------------------|------------------|
+| Non-HTTP traffic (databases, gRPC passthrough, game servers, MQTT) | You need path / host routing (`/api`, `api.example.com`) |
+| You need the lowest latency and millions of connections | You want TLS termination, WAF, header rewriting, redirects |
+| The backend must keep the client's TLS connection (passthrough) | Canary / blue-green by header or cookie |
+| You need the client's real source IP without headers | You want HTTP-aware health checks and retries |
+
+| In the cloud | L4 | L7 |
+|--------------|----|----|
+| AWS | Network Load Balancer (NLB) | Application Load Balancer (ALB) |
+| Azure | Azure Load Balancer | Application Gateway / Front Door |
+| GCP | Network Load Balancer | HTTP(S) Load Balancer |
+| Kubernetes | `Service type: LoadBalancer` | `Ingress` / Gateway API |
+
 ---
 
-## 20. Proxy and Reverse Proxy
+## 22. Proxy and Reverse Proxy
 
 **What it is:** A middleman. The only difference is *whose* side it sits on.
 
@@ -1077,7 +1506,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://10.0.1.11:8080/health
 | Typical use | Web filtering, caching downloads, controlled egress | TLS, load balancing, caching, rate limiting |
 | Examples | Squid, corporate proxy, `HTTP_PROXY` env var | nginx, Traefik, HAProxy, Cloudflare, ALB |
 
-### 20.1 Forward proxy in daily life
+### 22.1 Forward proxy in daily life
 
 ```bash
 export HTTP_PROXY=http://proxy.company.com:3128
@@ -1088,7 +1517,7 @@ curl https://example.com        # now goes through the proxy
 
 If `apt`, `docker pull` or `pip` fail behind a corporate network, those three variables (plus Docker's own proxy config) are usually the fix.
 
-### 20.2 Reverse proxy - the config you will write a hundred times
+### 22.2 Reverse proxy - the config you will write a hundred times
 
 ```nginx
 server {
@@ -1125,13 +1554,13 @@ Those `X-Forwarded-*` headers matter: without them your application logs every r
 
 ---
 
-## 21. Firewalls and Security Groups
+## 23. Firewalls and Security Groups
 
 **What it is:** Rules that decide which traffic is allowed in or out. The golden rule is **default deny**: block everything, then open exactly what you need.
 
 ![Firewall](images/19-firewall.png)
 
-### 21.1 A sane rule set for a web server
+### 23.1 A sane rule set for a web server
 
 | # | Direction | Port | Source | Action | Why |
 |---|-----------|------|--------|--------|-----|
@@ -1141,12 +1570,12 @@ Those `X-Forwarded-*` headers matter: without them your application logs every r
 | 4 | Inbound | 3306 | `10.0.1.0/24` | ALLOW | MySQL from the app subnet only |
 | 5 | Inbound | ANY | `0.0.0.0/0` | **DENY** | The implicit rule at the bottom |
 
-### 21.2 Stateful vs stateless
+### 23.2 Stateful vs stateless
 
 - **Stateful** (security groups, `ufw`, `firewalld`): allow a connection in, and the reply is automatically allowed back out. You only write one rule.
 - **Stateless** (AWS NACLs, plain `iptables` without conntrack): you must allow the return traffic too - including the ephemeral port range `1024-65535`.
 
-### 21.3 Cloud wording
+### 23.3 Cloud wording
 
 | Provider | Instance level | Subnet level |
 |----------|----------------|--------------|
@@ -1154,7 +1583,7 @@ Those `X-Forwarded-*` headers matter: without them your application logs every r
 | Azure | NSG | NSG on the subnet |
 | GCP | Firewall rules (by tag) | VPC firewall rules |
 
-### 21.4 Commands
+### 23.4 Commands
 
 ```bash
 # ufw (Ubuntu)
@@ -1175,7 +1604,9 @@ sudo firewall-cmd --list-all
 sudo iptables -L -n -v
 ```
 
-### 21.5 How a firewall feels from the outside
+These are just the basics. **Section 24** goes deep on iptables, ufw and firewalld.
+
+### 23.5 How a firewall feels from the outside
 
 | Behaviour | What the firewall did |
 |-----------|----------------------|
@@ -1192,20 +1623,303 @@ nc -zv app.example.com 443        # succeeded / refused / timed out
 
 ---
 
-## 22. VPN
+## 24. Linux Firewalls: iptables, ufw, firewalld
+
+**What it is:** Linux has one firewall engine in the kernel, called **netfilter**. Everything else is a tool for writing rules into it.
+
+```mermaid
+flowchart TD
+    U["ufw<br/>(Ubuntu / Debian)"] --> IPT
+    F["firewalld<br/>(RHEL / Rocky / Fedora)"] --> NFT
+    D["Docker / Kubernetes kube-proxy"] --> IPT
+    IPT["iptables<br/>(classic rule tool)"] --> NF
+    NFT["nftables / nft<br/>(modern replacement)"] --> NF
+    NF["⚙️ netfilter - in the Linux kernel"]
+```
+
+| Tool | Level | Default on | Think of it as |
+|------|-------|-----------|----------------|
+| **iptables** | Low level | Older distros, still everywhere | The assembly language of Linux firewalls |
+| **nftables** (`nft`) | Low level | Debian 10+, RHEL 8+ | The modern replacement for iptables |
+| **ufw** | Friendly front-end | Ubuntu | "Uncomplicated" - a few simple commands |
+| **firewalld** | Friendly front-end with **zones** | RHEL, Rocky, Alma, Fedora, CentOS | Dynamic rules without restarts |
+
+> ⚠️ **Warning:** Use **one** front-end per machine. Running ufw and firewalld together (or hand-written iptables rules under them) creates rules that fight each other.
+
+### 24.1 iptables - how it thinks
+
+**Tables** group rules by purpose; **chains** are the points a packet passes through.
+
+| Table | Job | Chains |
+|-------|-----|--------|
+| `filter` (default) | Allow or block | `INPUT`, `FORWARD`, `OUTPUT` |
+| `nat` | Rewrite addresses (NAT, port forwarding) | `PREROUTING`, `POSTROUTING`, `OUTPUT` |
+| `mangle` | Change packet fields (marks, TTL) | All five |
+| `raw` | Skip connection tracking | `PREROUTING`, `OUTPUT` |
+
+```mermaid
+flowchart LR
+    IN(["Packet arrives"]) --> PRE["PREROUTING<br/>(DNAT happens here)"]
+    PRE --> Q{"For this machine?"}
+    Q -->|yes| INPUT["INPUT"] --> APP["Local process<br/>(nginx, sshd)"]
+    APP --> OUTPUT["OUTPUT"] --> POST
+    Q -->|"no - forward it"| FWD["FORWARD<br/>(routers, Docker, K8s)"] --> POST["POSTROUTING<br/>(SNAT / MASQUERADE here)"]
+    POST --> OUT(["Packet leaves"])
+```
+
+| Chain | Handles traffic that is… |
+|-------|--------------------------|
+| `INPUT` | coming **to** this machine (someone SSHing in) |
+| `OUTPUT` | created **by** this machine (`apt update`) |
+| `FORWARD` | passing **through** this machine (it is acting as a router / Docker host) |
+
+**Targets** - what to do when a rule matches:
+
+| Target | Effect | Client sees |
+|--------|--------|-------------|
+| `ACCEPT` | Let it through | Normal |
+| `DROP` | Silently throw it away | **Timeout** |
+| `REJECT` | Throw it away and tell the sender | **Connection refused** |
+| `LOG` | Write to the kernel log, then continue to the next rule | - |
+| `MASQUERADE` / `SNAT` / `DNAT` | Rewrite addresses (nat table) | - |
+
+**Rules are checked top to bottom, and the first match wins.** If nothing matches, the chain's **policy** (`ACCEPT` or `DROP`) decides.
+
+### 24.2 iptables - reading rules
+
+```bash
+sudo iptables -L -n -v --line-numbers     # filter table, numeric, with counters
+sudo iptables -t nat -L -n -v             # the nat table
+sudo iptables -S                          # rules printed as the commands that created them
+```
+
+```
+Chain INPUT (policy DROP 120 packets, 7200 bytes)
+num  pkts bytes target  prot opt in  out  source        destination
+1    5012  420K ACCEPT  all  --  lo  *    0.0.0.0/0     0.0.0.0/0
+2    9.1K  12M  ACCEPT  all  --  *   *    0.0.0.0/0     0.0.0.0/0    ctstate RELATED,ESTABLISHED
+3      14   840 ACCEPT  tcp  --  *   *    203.0.113.5   0.0.0.0/0    tcp dpt:22
+4    3311  198K ACCEPT  tcp  --  *   *    0.0.0.0/0     0.0.0.0/0    tcp dpt:443
+```
+
+The `pkts` counter tells you whether a rule is actually being hit - the fastest way to find out which rule is blocking you.
+
+### 24.3 iptables - a complete, safe web-server rule set
+
+```bash
+#!/bin/bash
+# Order matters! Allow SSH BEFORE setting the DROP policy, or you lock yourself out.
+
+# 1. Start clean
+iptables -F                      # flush all rules
+iptables -X                      # delete custom chains
+
+# 2. Always allow loopback and replies to connections we started
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
+
+# 3. SSH only from the office / VPN IP
+iptables -A INPUT -p tcp -s 203.0.113.5/32 --dport 22 -j ACCEPT
+
+# 4. Public web
+iptables -A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT
+
+# 5. MySQL only from the app subnet
+iptables -A INPUT -p tcp -s 10.0.11.0/24 --dport 3306 -j ACCEPT
+
+# 6. Allow ping (helpful for monitoring)
+iptables -A INPUT -p icmp --icmp-type echo-request -j ACCEPT
+
+# 7. Log what is about to be dropped (rate-limited so logs don't explode)
+iptables -A INPUT -m limit --limit 5/min -j LOG --log-prefix "IPT-DROP: "
+
+# 8. Default policies LAST
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT ACCEPT
+```
+
+The `ESTABLISHED,RELATED` rule is what makes iptables **stateful**: once a connection is allowed in, its replies flow automatically.
+
+### 24.4 iptables - everyday edits
+
+```bash
+sudo iptables -A INPUT -p tcp --dport 8080 -j ACCEPT      # -A = append to the END
+sudo iptables -I INPUT 1 -s 198.51.100.7 -j DROP          # -I = insert at position 1 (top)
+sudo iptables -D INPUT 4                                  # delete rule number 4
+sudo iptables -D INPUT -p tcp --dport 8080 -j ACCEPT      # delete by exact spec
+sudo iptables -R INPUT 3 -p tcp -s 203.0.113.9 --dport 22 -j ACCEPT   # replace rule 3
+sudo journalctl -k | grep IPT-DROP                        # see what got dropped
+```
+
+> ⚠️ **Warning:** `-A` appends **after** existing rules. If an earlier rule already drops the traffic, your new `ACCEPT` is never reached. Use `-I` to insert at the top, then check with `--line-numbers`.
+
+### 24.5 iptables - NAT and port forwarding
+
+```bash
+# Turn this box into a NAT gateway for the 10.0.11.0/24 subnet (needs ip_forward=1, Section 12)
+sudo iptables -t nat -A POSTROUTING -s 10.0.11.0/24 -o eth0 -j MASQUERADE
+sudo iptables -A FORWARD -s 10.0.11.0/24 -o eth0 -j ACCEPT
+sudo iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# Port forwarding (DNAT): public :8080 → internal 10.0.11.10:80
+sudo iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 8080 -j DNAT --to-destination 10.0.11.10:80
+sudo iptables -A FORWARD -p tcp -d 10.0.11.10 --dport 80 -j ACCEPT
+
+# Redirect port 80 to an app on 8080 on the same machine
+sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
+```
+
+### 24.6 iptables - make it survive a reboot
+
+iptables rules live in memory and **vanish on reboot** unless you save them.
+
+```bash
+# Debian / Ubuntu
+sudo apt install iptables-persistent
+sudo netfilter-persistent save          # writes /etc/iptables/rules.v4 and rules.v6
+
+# RHEL family (if not using firewalld)
+sudo iptables-save > /etc/sysconfig/iptables
+
+# Manual backup / restore - do this before every big change
+sudo iptables-save > ~/iptables-backup.rules
+sudo iptables-restore < ~/iptables-backup.rules
+```
+
+> ⚠️ **Warning:** IPv6 has its own separate rule set: **`ip6tables`**. Locking down IPv4 while IPv6 is wide open is a real and common mistake.
+
+### 24.7 Docker and iptables (the trap everyone hits)
+
+Docker writes its own iptables rules (in the `nat` table and the `DOCKER` chain) when you publish a port with `-p 8080:80`. Those rules are processed **before** ufw's rules, so:
+
+> ⚠️ **Warning:** `docker run -p 3306:3306 mysql` exposes MySQL to the **whole internet even if `ufw deny 3306` is set**. Fixes: publish on localhost only (`-p 127.0.0.1:3306:3306`), don't publish database ports at all (use a Docker network), or put your rules in the **`DOCKER-USER`** chain, which Docker leaves alone:
+> ```bash
+> sudo iptables -I DOCKER-USER -i eth0 -p tcp --dport 3306 ! -s 10.0.11.0/24 -j DROP
+> ```
+
+### 24.8 nftables in 30 seconds
+
+Modern distros use nftables underneath - `iptables` is often really `iptables-nft`, a compatibility layer (`iptables -V` shows `nf_tables`).
+
+```bash
+sudo nft list ruleset                                    # everything, all tables
+sudo nft add rule inet filter input tcp dport 443 accept
+```
+
+You can keep using iptables syntax for years, but `nft list ruleset` is how you see what is *really* loaded.
+
+### 24.9 ufw - the Ubuntu way
+
+```bash
+sudo ufw status verbose                 # is it on? defaults? rules?
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+
+sudo ufw allow OpenSSH                  # app profile (see: sudo ufw app list)
+sudo ufw allow 443/tcp
+sudo ufw allow 'Nginx Full'             # 80 + 443
+sudo ufw allow from 10.0.11.0/24 to any port 5432 proto tcp
+sudo ufw allow from 203.0.113.5 to any port 22
+sudo ufw deny from 198.51.100.7         # block one bad IP
+sudo ufw limit 22/tcp                   # rate-limit: blocks IPs with 6+ attempts in 30s
+
+sudo ufw enable
+sudo ufw status numbered
+sudo ufw delete 3                       # delete by number
+sudo ufw delete allow 443/tcp           # or by rule
+sudo ufw logging on                     # logs go to /var/log/ufw.log
+sudo ufw reset                          # wipe everything and start again
+```
+
+ufw rules are permanent automatically, and IPv6 rules are added for you (`IPV6=yes` in `/etc/default/ufw`).
+
+### 24.10 firewalld - the RHEL way (zones)
+
+firewalld groups rules into **zones** (trust levels). Each interface or source IP belongs to one zone.
+
+| Zone | Trust | Typical use |
+|------|-------|-------------|
+| `drop` | Lowest - drop everything incoming, no reply | Hostile networks |
+| `block` | Reject everything incoming | |
+| `public` | **Default** - only selected services | Internet-facing interface |
+| `internal` / `trusted` | High / everything allowed | Private LAN, VPN interface |
+
+**Runtime vs permanent** - the #1 firewalld confusion:
+
+- Without `--permanent`: the change works **now** and is lost on reload/reboot.
+- With `--permanent`: saved to disk, but **not active until `--reload`**.
+
+```bash
+sudo firewall-cmd --state
+sudo firewall-cmd --get-active-zones
+sudo firewall-cmd --list-all                          # rules in the default zone
+sudo firewall-cmd --list-all --zone=internal
+
+sudo firewall-cmd --permanent --add-service=http --add-service=https
+sudo firewall-cmd --permanent --add-port=8080/tcp
+sudo firewall-cmd --permanent --remove-service=cockpit
+sudo firewall-cmd --reload
+
+# Trust the app subnet: everything from 10.0.11.0/24 uses the "internal" zone
+sudo firewall-cmd --permanent --zone=internal --add-source=10.0.11.0/24
+
+# Rich rule: SSH only from one IP
+sudo firewall-cmd --permanent --remove-service=ssh
+sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="203.0.113.5/32" service name="ssh" accept'
+
+# NAT gateway and port forwarding
+sudo firewall-cmd --permanent --add-masquerade
+sudo firewall-cmd --permanent --add-forward-port=port=8080:proto=tcp:toport=80:toaddr=10.0.11.10
+
+sudo firewall-cmd --reload
+
+# Tested something at runtime and it works? Save it:
+sudo firewall-cmd --runtime-to-permanent
+```
+
+### 24.11 Same job, three tools
+
+| Task | iptables | ufw | firewalld |
+|------|----------|-----|-----------|
+| Allow HTTPS | `iptables -A INPUT -p tcp --dport 443 -j ACCEPT` | `ufw allow 443/tcp` | `firewall-cmd --permanent --add-service=https` |
+| SSH from one IP | `iptables -A INPUT -p tcp -s 1.2.3.4 --dport 22 -j ACCEPT` | `ufw allow from 1.2.3.4 to any port 22` | rich rule (above) |
+| Block an IP | `iptables -I INPUT -s 1.2.3.4 -j DROP` | `ufw deny from 1.2.3.4` | `firewall-cmd --permanent --add-rich-rule='rule family=ipv4 source address=1.2.3.4 drop'` |
+| List rules | `iptables -L -n -v` | `ufw status numbered` | `firewall-cmd --list-all` |
+| Make permanent | `netfilter-persistent save` | automatic | `--permanent` + `--reload` |
+
+### 24.12 Don't lock yourself out
+
+```bash
+# Schedule an automatic rollback in 5 minutes BEFORE you change remote firewall rules
+sudo iptables-save > /root/fw-ok.rules
+echo "iptables-restore < /root/fw-ok.rules" | sudo at now + 5 minutes
+
+# ...apply your new rules, test SSH from a NEW terminal...
+# Still connected? Cancel the rollback:
+sudo atq            # find the job number
+sudo atrm <job>
+```
+
+For ufw: `echo "ufw disable" | sudo at now + 5 minutes`. In the cloud you can also use the serial console, or simply rely on the **security group** as the main firewall and keep the host firewall as a second layer.
+
+---
+
+## 25. VPN
 
 **What it is:** An encrypted tunnel across a public network, which also gives you an IP **inside** the private network.
 
 ![VPN](images/20-vpn.png)
 
-### 22.1 The two types
+### 25.1 The two types
 
 | Type | Connects | Used for |
 |------|----------|----------|
 | **Remote access** | One person → company network | Engineers reaching private servers from home |
 | **Site-to-site** | Whole office/data centre → cloud VPC | Hybrid infrastructure, permanent IPsec tunnel |
 
-### 22.2 What it changes
+### 25.2 What it changes
 
 | Without VPN | With VPN |
 |-------------|----------|
@@ -1213,7 +1927,7 @@ nc -zv app.example.com 443        # succeeded / refused / timed out
 | Anyone on the café Wi-Fi sees your traffic metadata | Encrypted end to end |
 | Admin panels need public exposure | Admin panels stay private - VPN only |
 
-### 22.3 Tools you will meet
+### 25.3 Tools you will meet
 
 | Tool | Note |
 |------|------|
@@ -1236,19 +1950,234 @@ ping 10.0.21.10
 > 💡 **Tip:** The safest production pattern: **no public IPs on app or database servers**. Only the load balancer is public; humans get in through a VPN or a bastion host. If someone asks you to open a database port to `0.0.0.0/0`, suggest the VPN instead.
 
 > ⚠️ **Warning:** If your home network is `192.168.1.0/24` and the office VPN is also `192.168.1.0/24`, routing breaks in confusing ways. That is why companies pick unusual ranges like `10.42.0.0/16`.
+
+---
+
+## 26. VPC: Your Private Network in the Cloud
+
+**What it is:** A **VPC** (Virtual Private Cloud) is your own isolated network inside AWS, GCP or Azure. You choose its IP range, cut it into subnets, decide what can reach the internet, and put firewalls around everything. Every idea from this guide - CIDR, subnets, routing, NAT, gateways, firewalls, DNS, VPN - comes together here.
+
+**Why DevOps people care:** Almost every cloud deployment starts with "create the VPC". Most "it can't connect" tickets in the cloud are a VPC problem: wrong route table, missing NAT gateway, security group, or NACL.
+
+```mermaid
+flowchart TB
+    USERS(("🌍 Internet users")) --> IGW
+    subgraph VPC["VPC 10.0.0.0/16"]
+        IGW["Internet Gateway"]
+        subgraph PUB["Public subnets - 10.0.1.0/24, 10.0.2.0/24<br/>route: 0.0.0.0/0 → IGW"]
+            ALB["Application Load Balancer"]
+            NAT["NAT Gateway<br/>(+ Elastic IP)"]
+            BASTION["Bastion host"]
+        end
+        subgraph PRIV["Private subnets - 10.0.11.0/24, 10.0.12.0/24<br/>route: 0.0.0.0/0 → NAT GW"]
+            APP1["App server AZ-a"]
+            APP2["App server AZ-b"]
+        end
+        subgraph DATA["Data subnets - 10.0.21.0/24, 10.0.22.0/24<br/>no internet route"]
+            DB[("Database<br/>primary + replica")]
+        end
+        IGW --> ALB
+        ALB --> APP1 & APP2
+        APP1 & APP2 --> DB
+        APP1 & APP2 -.->|"apt update / API calls"| NAT
+        NAT -.-> IGW
+        EP["VPC Endpoint (S3)"]
+        APP1 -.-> EP
+    end
+```
+
+### 26.1 The building blocks
+
+| Component | What it does | On-prem equivalent |
+|-----------|--------------|-------------------|
+| **VPC** | Your isolated network with a CIDR block (e.g. `10.0.0.0/16`) | The whole office network |
+| **Subnet** | A slice of the VPC CIDR, locked to **one availability zone** | A VLAN |
+| **Route table** | Decides where traffic from a subnet goes (Section 12.6) | Router config |
+| **Internet Gateway (IGW)** | Two-way door between the VPC and the internet | The edge router |
+| **NAT Gateway** | Outbound-only internet for private subnets (Section 10) | Home router NAT |
+| **Elastic / static public IP** | A public IP that stays the same | The ISP's static IP |
+| **Security Group** | Stateful firewall around each instance / ENI | Host firewall |
+| **Network ACL (NACL)** | Stateless firewall around each subnet | Router ACL |
+| **VPC Endpoint** | Reach cloud services (S3, DynamoDB, ECR…) privately, without the internet | - |
+| **VPC Peering / Transit Gateway** | Connect VPCs together | WAN links |
+| **VPN Gateway / Direct Connect** | Connect the VPC to the office / data centre | Site-to-site VPN / leased line |
+| **Flow Logs** | Record of accepted / rejected connections | Firewall logs |
+| **DNS resolver** | Built-in DNS at the VPC base address + 2 (e.g. `10.0.0.2`), private hosted zones | Internal DNS server |
+
+### 26.2 What makes a subnet "public" or "private"
+
+It is **only the route table**, nothing else:
+
+| Subnet type | Route table has | Instances need | Reachable from internet? |
+|-------------|----------------|----------------|-------------------------|
+| **Public** | `0.0.0.0/0 → igw-…` | A public / Elastic IP | ✅ Yes (if the SG allows) |
+| **Private** | `0.0.0.0/0 → nat-…` | Nothing | ❌ No, but can reach out |
+| **Isolated / data** | Only `10.0.0.0/16 → local` | Nothing | ❌ No, and cannot reach out |
+
+### 26.3 Security Groups vs NACLs
+
+| | Security Group | Network ACL |
+|---|---|---|
+| Attached to | Instance / network interface | Subnet |
+| State | **Stateful** - replies allowed automatically | **Stateless** - must allow the return traffic (ports `1024-65535`) |
+| Rules | Allow only | Allow **and** deny |
+| Order | All rules evaluated together | Numbered, lowest first, first match wins |
+| Can reference | Other security groups (`sg-app` → `sg-db`) | Only CIDR ranges |
+| Default | Deny all in, allow all out | Allow all (the default NACL) |
+| Use it for | 99% of your rules | Subnet-wide blocks (e.g. ban an IP range) |
+
+> 💡 **Tip:** Reference security groups instead of IPs: "the DB security group allows 5432 **from `sg-app`**". When app servers scale or change IP, the rule still works.
+
+### 26.4 Follow one request through the VPC
+
+```
+User → https://app.example.com
+ 1. DNS (Route 53)         → ALB's public IP
+ 2. Internet → IGW         → ALB in the public subnet         SG-alb allows 443 from 0.0.0.0/0
+ 3. ALB → 10.0.11.10:8080  → app in the private subnet        SG-app allows 8080 from SG-alb
+ 4. App → 10.0.21.10:5432  → database in the data subnet      SG-db allows 5432 from SG-app
+ 5. App → api.stripe.com   → route 0.0.0.0/0 → NAT GW → IGW   outbound only
+ 6. App → S3               → VPC gateway endpoint             never leaves the AWS network
+```
+
+If any step breaks, you now know exactly which route table or security group to check.
+
+### 26.5 Connecting networks together
+
+| Option | Connects | Note |
+|--------|----------|------|
+| **VPC Peering** | VPC ↔ VPC (same or different account/region) | Simple and cheap, but **not transitive**: A↔B and B↔C does *not* give A↔C |
+| **Transit Gateway** | Many VPCs + VPNs through one hub | The answer when you have more than a handful of VPCs |
+| **Site-to-site VPN** | Office / data centre ↔ VPC | IPsec over the internet, up in minutes (Section 25) |
+| **Direct Connect / ExpressRoute / Interconnect** | Data centre ↔ cloud over a private line | Stable latency, high bandwidth, takes weeks to set up |
+| **PrivateLink / Interface endpoint** | Expose **one service** to another VPC | No CIDR overlap issues, no full network access |
+
+> ⚠️ **Warning:** Peering and Transit Gateway **require non-overlapping CIDRs**. If every team created `10.0.0.0/16`, none of those VPCs can ever be connected. Plan an IP address map for the whole company up front (e.g. `10.10.0.0/16` prod, `10.20.0.0/16` staging, `10.30.0.0/16` dev).
+
+### 26.6 Same thing, different names
+
+| Concept | AWS | Azure | GCP |
+|---------|-----|-------|-----|
+| Private network | VPC | VNet | VPC (global, subnets are regional) |
+| Instance firewall | Security Group | NSG | Firewall rules (by tag / service account) |
+| Subnet firewall | NACL | NSG on subnet | - |
+| Outbound NAT | NAT Gateway | NAT Gateway | Cloud NAT |
+| Connect networks | Peering, Transit Gateway | VNet Peering, Virtual WAN | VPC Peering, Shared VPC, NCC |
+| Private service access | VPC Endpoint / PrivateLink | Private Endpoint | Private Service Connect |
+| Private line | Direct Connect | ExpressRoute | Cloud Interconnect |
+| Traffic logs | VPC Flow Logs | NSG Flow Logs | VPC Flow Logs |
+
+### 26.7 A VPC in Terraform (the shape of it)
+
+```hcl
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_hostnames = true
+}
+
+resource "aws_subnet" "public_a" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = "ap-southeast-2a"
+  map_public_ip_on_launch = true
+}
+
+resource "aws_subnet" "private_a" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.0.11.0/24"
+  availability_zone = "ap-southeast-2a"
+}
+
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+}
+
+resource "aws_eip" "nat" {
+  domain = "vpc"
+}
+
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public_a.id      # NAT GW lives in a PUBLIC subnet
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
+  }
+}
+
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.nat.id
+  }
+}
+
+resource "aws_route_table_association" "public_a" {
+  subnet_id      = aws_subnet.public_a.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table_association" "private_a" {
+  subnet_id      = aws_subnet.private_a.id
+  route_table_id = aws_route_table.private.id
+}
+```
+
+In real projects, most teams use the community module [`terraform-aws-modules/vpc/aws`](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/latest), which builds all of this from a few lines.
+
+### 26.8 Inspect a VPC from the CLI
+
+```bash
+aws ec2 describe-vpcs --query "Vpcs[].[VpcId,CidrBlock]" --output table
+aws ec2 describe-subnets --filters Name=vpc-id,Values=vpc-0abc --query "Subnets[].[SubnetId,CidrBlock,AvailabilityZone]" --output table
+aws ec2 describe-route-tables --filters Name=vpc-id,Values=vpc-0abc
+aws ec2 describe-security-groups --group-ids sg-0abc
+aws ec2 describe-nat-gateways
+
+# From inside an instance - who am I, where am I? (IMDSv2)
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4
+```
+
+**VPC Flow Logs** answer "was this connection allowed or rejected?":
+
+```
+2 123456789012 eni-0abc 203.0.113.5 10.0.11.10 51234 22 6 10 840 1700000000 1700000060 REJECT OK
+```
+
+Read it as: from `203.0.113.5:51234` to `10.0.11.10` port `22`, protocol `6` (TCP), **REJECT** → a security group or NACL blocked this SSH attempt.
+
+### 26.9 Common VPC mistakes
+
+| Symptom | Cause |
+|---------|-------|
+| Instance in a "public" subnet unreachable | No public IP, or the route table has no `0.0.0.0/0 → IGW` |
+| Private instance cannot `apt update` / pull images | No NAT gateway, NAT GW placed in a private subnet, or route missing |
+| Works in AZ-a, broken in AZ-b | Second subnet uses a different route table (or the NAT GW only exists in AZ-a) |
+| SG allows it, still blocked | The **NACL** is blocking, often the return ports `1024-65535` |
+| Can't peer two VPCs | Overlapping CIDRs |
+| A↔B and B↔C work, A↔C doesn't | Peering is not transitive - use a Transit Gateway |
+| Huge NAT gateway bill | Heavy S3/ECR traffic going through NAT - add VPC endpoints |
+| Subnet ran out of IPs | `/24` minus 5 reserved, and EKS gives every pod a VPC IP - size subnets generously |
+
 ---
 
 # PART 4: Tools and Practice
 
 ---
 
-## 23. The Networking Toolbox
+## 27. The Networking Toolbox
 
 Every tool answers one question at one layer. Learn which question each one answers and troubleshooting becomes mechanical.
 
 ![Tools by layer](images/21-tools-by-layer.png)
 
-### 23.1 `ping` - can I reach the host at all?
+### 27.1 `ping` - can I reach the host at all?
 
 ```bash
 ping example.com            # Linux/Mac: runs until Ctrl+C
@@ -1271,7 +2200,7 @@ rtt min/avg/max/mdev = 12.1/12.6/13.2/0.4 ms
 
 > ⚠️ **Warning:** "Ping fails" does **not** mean "the server is down". Many clouds block ICMP by default. Always confirm with `nc -zv host port` before declaring an outage.
 
-### 23.2 `traceroute` / `tracert` / `mtr` - where does it break?
+### 27.2 `traceroute` / `tracert` / `mtr` - where does it break?
 
 ```bash
 traceroute example.com         # Linux/Mac
@@ -1289,7 +2218,7 @@ mtr example.com                # live, continuously updating - the best of the t
 
 Read it as: latency should climb gradually. A jump from 12ms to 300ms at one hop shows you where the slowness starts. `* * *` at a single hop is usually just a router that ignores traceroute; `* * *` all the way to the end means the path really is broken.
 
-### 23.3 `dig` / `nslookup` - is the name right?
+### 27.3 `dig` / `nslookup` - is the name right?
 
 ```bash
 dig +short app.example.com        # the answer, nothing else
@@ -1300,7 +2229,7 @@ dig -x 93.184.216.34              # reverse lookup
 nslookup app.example.com          # the Windows-friendly option
 ```
 
-### 23.4 `curl` - is the application answering?
+### 27.4 `curl` - is the application answering?
 
 ```bash
 curl -I https://example.com                      # headers only
@@ -1312,7 +2241,7 @@ curl --resolve app.example.com:443:203.0.113.50 https://app.example.com   # test
 curl -x http://proxy:3128 https://example.com    # through a proxy
 ```
 
-### 23.5 `wget` - download files and mirror sites
+### 27.5 `wget` - download files and mirror sites
 
 ```bash
 wget https://example.com/file.tar.gz
@@ -1327,7 +2256,7 @@ wget -r -l 2 https://example.com             # recursive download (be polite)
 | Output | stdout by default | A file by default |
 | In scripts | Health checks, API calls | Fetching artifacts |
 
-### 23.6 `ss` and `netstat` - what is listening here?
+### 27.6 `ss` and `netstat` - what is listening here?
 
 ```bash
 ss -tulpn                  # TCP+UDP listening, with process names
@@ -1341,7 +2270,7 @@ netstat -an | findstr LISTENING    # Windows
 
 TCP states you will see: `LISTEN` (waiting), `ESTABLISHED` (connected), `TIME_WAIT` (recently closed - harmless in small numbers), `SYN_SENT` (handshake never answered → firewall).
 
-### 23.7 `telnet` and `nc` - is the port open?
+### 27.7 `telnet` and `nc` - is the port open?
 
 ```bash
 nc -zv example.com 443            # preferred
@@ -1364,7 +2293,30 @@ Host: example.com
           ← press Enter twice
 ```
 
-### 23.8 `ip` - addresses, routes and links
+**netcat is a Swiss army knife**, not just a port checker:
+
+```bash
+# Scan a small range of ports
+nc -zv -w 1 10.0.1.11 20-25
+
+# Check a UDP port (DNS) - UDP gives weaker answers, "succeeded" only means no rejection
+nc -zvu 8.8.8.8 53
+
+# Start a tiny listener - prove a firewall path works BEFORE the real app exists
+nc -l 9000                 # on the server (some versions: nc -l -p 9000)
+nc SERVER_IP 9000          # on the client - type, and it appears on the server
+
+# Copy a file without SSH/SCP (inside a trusted network only - it is not encrypted)
+nc -l 9000 > backup.tar.gz                # receiver
+nc -N SERVER_IP 9000 < backup.tar.gz      # sender (-N closes when done)
+
+# Fake an HTTP server in one line, to test a load balancer health check
+while true; do printf 'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK' | nc -l 8080; done
+```
+
+> 💡 **Tip:** The listener trick is the cleanest way to split a problem in half: if `nc` can connect to your `nc -l`, the network and firewall are fine and the problem is the application.
+
+### 27.8 `ip` - addresses, routes and links
 
 ```bash
 ip a                  # addresses
@@ -1373,7 +2325,7 @@ ip route              # routing table, including "default via" (your gateway)
 ip neigh              # ARP table: IP → MAC on this LAN
 ```
 
-### 23.9 `tcpdump` - see the actual packets
+### 27.9 `tcpdump` - see the actual packets
 
 ```bash
 sudo tcpdump -i any -n port 443
@@ -1382,9 +2334,40 @@ sudo tcpdump -i any -n port 53                 # watch DNS queries live
 sudo tcpdump -i any -n -w capture.pcap         # save for Wireshark
 ```
 
+Useful filters and flags:
+
+```bash
+sudo tcpdump -D                                        # list interfaces
+sudo tcpdump -i eth0 -n -c 20 port 80                  # stop after 20 packets
+sudo tcpdump -i any -n src 10.0.1.11 and dst port 5432 # combine with and / or / not
+sudo tcpdump -i any -n net 10.0.11.0/24                # a whole subnet
+sudo tcpdump -i any -n 'tcp[tcpflags] & (tcp-syn|tcp-rst) != 0'   # only SYNs and RSTs
+sudo tcpdump -i any -n -A port 80                      # print payload as text (plain HTTP)
+sudo tcpdump -i any -n icmp                            # watch ping / traceroute
+sudo tcpdump -r capture.pcap -n                        # read a saved capture
+```
+
+Reading one line:
+
+```
+10:15:02.114 IP 10.0.1.25.51544 > 93.184.216.34.443: Flags [S], seq 123, win 64240, length 0
+              └─ source IP.port   └─ destination IP.port  └─ S = SYN
+```
+
+| Flag | Meaning | What it tells you |
+|------|---------|-------------------|
+| `[S]` | SYN | Client trying to connect |
+| `[S.]` | SYN-ACK | Server answered - the port is open |
+| `[.]` | ACK | Normal traffic |
+| `[P.]` | PUSH + ACK | Data being sent |
+| `[F.]` | FIN | Polite close |
+| `[R]` / `[R.]` | RST | Refused or killed - nothing listening, or a firewall REJECT |
+
+**Only `[S]` repeating with no `[S.]`** = the SYN never gets an answer → firewall drop or routing problem. **`[S]` followed by `[R.]`** = the host is reachable but nothing listens on that port.
+
 Use it when every other tool says "should be fine" and it still is not.
 
-### 23.10 One-line reference
+### 27.10 One-line reference
 
 | Tool | Answers |
 |------|---------|
@@ -1400,11 +2383,11 @@ Use it when every other tool says "should be fine" and it still is not.
 
 ---
 
-## 24. Troubleshooting Playbook
+## 28. Troubleshooting Playbook
 
 ![Troubleshooting flow](images/22-troubleshooting-flow.png)
 
-### 24.1 "The site is down" - run these in order
+### 28.1 "The site is down" - run these in order
 
 ```bash
 # 1. Does the name resolve, and to the IP you expect?
@@ -1424,7 +2407,7 @@ ss -tulpn | grep -E ':(80|443|8080)'
 curl -v https://app.example.com
 ```
 
-### 24.2 Symptom → likely cause
+### 28.2 Symptom → likely cause
 
 | Symptom | Most likely cause | Check |
 |---------|------------------|-------|
@@ -1440,8 +2423,13 @@ curl -v https://app.example.com
 | Private server cannot `apt update` | Missing NAT gateway or route | Route table, NAT gateway |
 | Works on IPv4, breaks sometimes | Broken `AAAA` record | `dig AAAA`, `curl -4` |
 | Intermittent slowness | Packet loss on the path | `mtr` for a few minutes |
+| `Network is unreachable` | No matching route / no default gateway | `ip route`, `ip route get <ip>` |
+| Works one direction, hangs the other | Asymmetric routing, or NACL missing return ports | Route tables on both sides, NACL `1024-65535` |
+| Docker port open to the world despite `ufw deny` | Docker's iptables rules bypass ufw | Bind to `127.0.0.1`, use `DOCKER-USER` chain |
+| Firewall rule "added" but no effect | Rule placed after an earlier DROP, or firewalld `--permanent` without `--reload` | `iptables -L --line-numbers`, `firewall-cmd --list-all` |
+| Works in Chrome, fails in curl/Java | Missing intermediate certificate | Serve `fullchain.pem`, test with `openssl s_client` |
 
-### 24.3 The two habits that matter
+### 28.3 The two habits that matter
 
 1. **Change one thing at a time.** Then re-test. Three simultaneous changes make the cause unfindable.
 2. **Prove each layer before moving up.** Name → host → port → application. Do not debug HTTP headers when the port is closed.
@@ -1450,7 +2438,7 @@ curl -v https://app.example.com
 
 ---
 
-## 25. Practice Labs
+## 29. Practice Labs
 
 Reading is not learning. Do these on your laptop or a free cloud VM.
 
@@ -1521,9 +2509,60 @@ dig github.com                        # terminal 2
 
 You will see the query leave and the answer come back - DNS stops being magic.
 
+### Lab 9: Read and change your routes (15 minutes)
+
+```bash
+ip route                         # find your default gateway
+ip route get 8.8.8.8             # which route and interface would be used
+ip route get 192.168.1.1
+traceroute -n 8.8.8.8            # the first hop should be your gateway
+```
+
+On a test VM (not your only connection!): `sudo ip route del default`, then `ping 8.8.8.8` → "Network is unreachable". Put it back with `sudo ip route add default via <gateway>`. You have just seen what "no default route" looks like.
+
+### Lab 10: Build an iptables firewall and watch the counters (30 minutes)
+
+On a test VM, run the rule set from **24.3** (with your own IP in the SSH rule), then:
+
+```bash
+sudo iptables -L INPUT -n -v --line-numbers     # note the pkts counters
+curl -I http://SERVER_IP                         # from your laptop - counter on the 80/443 rule goes up
+nc -zv -w 3 SERVER_IP 3306                       # times out (DROP)
+sudo journalctl -k | grep IPT-DROP               # the dropped attempt is logged
+```
+
+Now append `sudo iptables -A INPUT -p tcp -j REJECT --reject-with tcp-reset` and repeat the `nc` test: "timed out" becomes "refused". That is DROP vs REJECT, felt from the outside. Save with `netfilter-persistent save` and reboot to prove the rules survive.
+
+### Lab 11: HTTPS with your own certificate (30 minutes)
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
+  -keyout server.key -out server.crt -subj "/CN=myapp.local" \
+  -addext "subjectAltName=DNS:myapp.local"
+```
+
+Configure nginx with `listen 443 ssl` and these two files, add `127.0.0.1 myapp.local` to `/etc/hosts`, then:
+
+```bash
+curl https://myapp.local                      # fails: self signed certificate
+curl --cacert server.crt https://myapp.local  # works: you told curl to trust it
+openssl s_client -connect myapp.local:443 -servername myapp.local </dev/null | head -20
+curl -v https://myapp.local 2>&1 | grep -E "SSL connection|TLSv"   # see the TLS version and cipher
+```
+
+### Lab 12: Draw (or build) a VPC (45 minutes)
+
+On paper, or in a free-tier AWS account with the Terraform from **26.7**: one VPC, a public and a private subnet, an IGW, a NAT gateway and two route tables. Launch one instance in each subnet. Prove that:
+
+1. You can SSH to the public instance, but not directly to the private one.
+2. From the public instance you can SSH to the private one (bastion pattern).
+3. The private instance can `curl https://example.com` (through NAT), and `curl ifconfig.me` shows the **NAT gateway's** Elastic IP.
+
+Then **delete everything** - NAT gateways cost money every hour.
+
 ---
 
-## 26. Cheat Sheet
+## 30. Cheat Sheet
 
 ```bash
 # ───── Identity ─────────────────────────────────────────────
@@ -1560,6 +2599,29 @@ echo | openssl s_client -connect host:443 -servername host 2>/dev/null \
 
 # ───── Packets ──────────────────────────────────────────────
 sudo tcpdump -i any -n port 443
+sudo tcpdump -i any -n -w capture.pcap         # save for Wireshark
+
+# ───── Routing ──────────────────────────────────────────────
+ip route                     # route table + default gateway
+ip route get 8.8.8.8         # which route would be used
+sudo ip route add 10.20.0.0/16 via 192.168.1.254
+sysctl net.ipv4.ip_forward   # is this box allowed to route?
+
+# ───── Firewall ─────────────────────────────────────────────
+sudo iptables -L -n -v --line-numbers
+sudo iptables -t nat -L -n -v
+sudo iptables-save > backup.rules
+sudo ufw status numbered
+sudo firewall-cmd --list-all
+
+# ───── Certificates ─────────────────────────────────────────
+openssl x509 -in cert.pem -noout -subject -issuer -dates -ext subjectAltName
+sudo certbot certificates
+sudo certbot renew --dry-run
+
+# ───── netcat ───────────────────────────────────────────────
+nc -l 9000                   # listen (test a firewall path)
+nc host 9000                 # connect to it
 ```
 
 ### Numbers worth memorising
@@ -1574,10 +2636,141 @@ sudo tcpdump -i any -n port 443
 | DHCP failed | `169.254.x.x` |
 | Core ports | 22 SSH · 53 DNS · 80 HTTP · 443 HTTPS · 3306 MySQL · 5432 Postgres · 6379 Redis |
 | Refused vs timeout | Refused = service problem · Timeout = firewall problem |
+| AWS reserved IPs | 5 per subnet → `/24` = 251 usable |
+| Let's Encrypt validity | 90 days (renewed around day 60) |
+| Modern TLS | 1.2 and 1.3 only |
+| Route choice | Longest prefix wins, then lowest metric |
+| Public subnet | Route `0.0.0.0/0 → Internet Gateway` |
 
 ---
 
-## 27. Reference
+## 31. Interview Questions
+
+Try to answer out loud before you open each one.
+
+<details>
+<summary><b>1. What is the difference between the OSI and TCP/IP models?</b></summary>
+
+OSI is a 7-layer reference model used for vocabulary and teaching. TCP/IP is the 4-layer model the internet actually runs on (Application, Transport, Internet, Link). OSI's application, presentation and session layers are merged into TCP/IP's application layer. See Sections 2-3.
+</details>
+
+<details>
+<summary><b>2. What happens when you type a URL into the browser and press Enter?</b></summary>
+
+DNS lookup (browser cache → OS → resolver → root → TLD → authoritative), TCP 3-way handshake to port 443, TLS handshake (certificate validation, key exchange), HTTP request, server (often via load balancer / reverse proxy) returns a response, browser renders and fetches more resources. See Section 5.
+</details>
+
+<details>
+<summary><b>3. TCP vs UDP - when would you use each?</b></summary>
+
+TCP is connection-oriented, reliable and ordered (HTTP, SSH, databases). UDP is connectionless and fast with no delivery guarantee (DNS, DHCP, video, VoIP, metrics). Use UDP when late data is useless anyway. See Section 13.
+</details>
+
+<details>
+<summary><b>4. How many usable hosts are in a /26? Split 10.0.0.0/24 into 4 subnets.</b></summary>
+
+`2^(32-26) - 2 = 62`. Four `/26` subnets: `10.0.0.0/26`, `10.0.0.64/26`, `10.0.0.128/26`, `10.0.0.192/26`. (In AWS, 59 usable each because 5 are reserved.) See Sections 7-8.
+</details>
+
+<details>
+<summary><b>5. What are the private IP ranges, and why do they exist?</b></summary>
+
+`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (RFC 1918). They are not routed on the internet, so every organisation can reuse them; NAT translates them to public IPs for outbound traffic. See Section 9.
+</details>
+
+<details>
+<summary><b>6. What does a default gateway do? How does a host decide where to send a packet?</b></summary>
+
+If the destination is in the host's own subnet, it delivers directly (ARP for the MAC). Otherwise it sends it to the default gateway. Routers pick routes by longest prefix match, then lowest metric. See Section 12.
+</details>
+
+<details>
+<summary><b>7. "Connection refused" vs "connection timed out" - what does each tell you?</b></summary>
+
+Refused: the packet reached the host but nothing is listening on that port (or a firewall REJECTs) → service problem. Timed out: no reply at all → a firewall is DROPping, or there is no route. See Sections 13 and 23.
+</details>
+
+<details>
+<summary><b>8. Explain the TLS handshake.</b></summary>
+
+ClientHello (versions, ciphers, key share, SNI) → ServerHello (chosen cipher, key share) → both derive session keys with ECDHE → server sends certificate and proves it owns the private key → client validates the chain, name and dates → Finished → encrypted application data. TLS 1.3 does this in one round trip. See Section 17.
+</details>
+
+<details>
+<summary><b>9. A site works in the browser but curl says "unable to get local issuer certificate". Why?</b></summary>
+
+The server is not sending the intermediate certificate. Browsers often fill the gap; curl does not. Configure the server with `fullchain.pem`. See Section 17.3.
+</details>
+
+<details>
+<summary><b>10. L4 vs L7 load balancer?</b></summary>
+
+L4 routes on IP + port and forwards TCP/UDP without reading it (fast, any protocol, e.g. AWS NLB). L7 reads HTTP, so it can route by path/host/header, terminate TLS and do HTTP health checks (e.g. AWS ALB, nginx). See Section 21.
+</details>
+
+<details>
+<summary><b>11. Forward proxy vs reverse proxy?</b></summary>
+
+A forward proxy sits in front of clients and makes requests for them (corporate egress, `HTTP_PROXY`). A reverse proxy sits in front of servers and receives requests for them (nginx, load balancers, CDNs). See Section 22.
+</details>
+
+<details>
+<summary><b>12. You get a 502 from nginx. How do you debug it?</b></summary>
+
+nginx is up but the backend isn't answering. Check the backend process (`systemctl status`), that it listens on the `proxy_pass` port and an address nginx can reach (`ss -tulpn`), test it directly (`curl localhost:3000`), then read the nginx error log. See Sections 16 and 22.
+</details>
+
+<details>
+<summary><b>13. Security group vs NACL?</b></summary>
+
+Security groups are stateful, allow-only, attached to instances, and can reference other SGs. NACLs are stateless, allow + deny, attached to subnets, evaluated in number order, and need the return ephemeral ports allowed. See Section 26.3.
+</details>
+
+<details>
+<summary><b>14. What makes a subnet public? How does a private instance reach the internet?</b></summary>
+
+A public subnet's route table has `0.0.0.0/0 → Internet Gateway`. A private instance uses a route `0.0.0.0/0 → NAT Gateway`, and the NAT gateway sits in a public subnet. See Section 26.2.
+</details>
+
+<details>
+<summary><b>15. iptables: DROP vs REJECT, and what does the ESTABLISHED,RELATED rule do?</b></summary>
+
+DROP silently discards (client sees a timeout); REJECT sends back an error (client sees refused). `-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT` allows replies to connections that were already permitted, which makes the firewall stateful. See Section 24.
+</details>
+
+<details>
+<summary><b>16. You ran `ufw deny 3306`, yet a Docker MySQL container is reachable from the internet. Why?</b></summary>
+
+Docker inserts its own iptables NAT/forward rules for published ports, and they are processed before ufw's rules. Bind to `127.0.0.1:3306:3306`, don't publish the port, or filter in the `DOCKER-USER` chain. See Section 24.7.
+</details>
+
+<details>
+<summary><b>17. You changed a DNS record but users still reach the old server. Why, and how do you avoid it?</b></summary>
+
+Resolvers cache the old answer for the record's TTL. Lower the TTL (e.g. to 60s) a day before the migration, switch, then raise it again. Check with `dig @8.8.8.8` and `dig +trace`. See Section 15.
+</details>
+
+<details>
+<summary><b>18. Ping works, but the website doesn't load. What do you check?</b></summary>
+
+ICMP working only proves layer 3. Check the port (`nc -zv host 443`), the listening address (`ss -tulpn`), the firewall / SG for that port, then HTTP and TLS with `curl -v`. If it hangs midway on big responses, suspect MTU (especially over a VPN). See Sections 4 and 28.
+</details>
+
+<details>
+<summary><b>19. Why can't two VPCs with 10.0.0.0/16 be peered, and how do you prevent it?</b></summary>
+
+Routes would be ambiguous - both sides claim the same addresses. Plan a non-overlapping IP address map per environment/account up front; for single services, PrivateLink works even with overlaps. See Section 26.5.
+</details>
+
+<details>
+<summary><b>20. What is SNI and why does it matter?</b></summary>
+
+Server Name Indication: the client sends the hostname in the ClientHello so a server with one IP can present the right certificate for many domains. Without it, you get the default certificate and a name mismatch. See Section 17.7.
+</details>
+
+---
+
+## 32. Reference
 
 - 📘 [Cloudflare Learning Center](https://www.cloudflare.com/learning/) - the clearest free explanations of DNS, TLS, proxies and CDNs
 - 📘 [Beej's Guide to Network Programming](https://beej.us/guide/bgnet/) - how sockets really work
@@ -1591,6 +2784,11 @@ sudo tcpdump -i any -n port 443
 - ☁️ [AWS VPC docs](https://docs.aws.amazon.com/vpc/latest/userguide/what-is-amazon-vpc.html) - subnets, route tables, NAT, security groups
 - ☸️ [Kubernetes networking](https://kubernetes.io/docs/concepts/services-networking/) - services, DNS and ingress
 - 🦈 [Wireshark](https://www.wireshark.org/) - when `tcpdump` output needs a UI
+- 🔥 [iptables tutorial (Frozentux)](https://www.frozentux.net/iptables-tutorial/iptables-tutorial.html) - the classic deep dive into chains and tables
+- 🔥 [Ubuntu ufw guide](https://help.ubuntu.com/community/UFW) and [firewalld docs](https://firewalld.org/documentation/)
+- 🔒 [Let's Encrypt - how it works](https://letsencrypt.org/how-it-works/) and [certbot](https://certbot.eff.org/)
+- 🔒 [The Illustrated TLS 1.3 Connection](https://tls13.xargs.org/) - every byte of the handshake explained
+- ☁️ [terraform-aws-modules/vpc](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/latest) - production VPC in a few lines
 
 > 💡 **Tip:** Learn by doing. Run every command in this guide on a real machine, break something on purpose, then fix it. That is the only way networking sticks.
 
